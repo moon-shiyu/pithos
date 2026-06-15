@@ -224,6 +224,152 @@ def parse_proxy(proxy):
     return scheme, user, password, hostport
 
 
+_VALID_PROXY_SCHEMES = frozenset({
+    'http', 'https', 'socks4', 'socks4a', 'socks5', 'socks5h',
+})
+
+
+def _split_hostport(hostport):
+    """Split host:port string, handling IPv6 bracket notation."""
+    if hostport.startswith('['):
+        # IPv6: [::1]:port
+        bracket_end = hostport.find(']')
+        if bracket_end == -1:
+            raise ValueError("unterminated IPv6 bracket in %r" % hostport)
+        host = hostport[1:bracket_end]
+        rest = hostport[bracket_end + 1:]
+        if rest.startswith(':'):
+            port_str = rest[1:]
+        elif rest == '':
+            port_str = None
+        else:
+            raise ValueError("unexpected chars after IPv6 address in %r" % hostport)
+    elif ':' in hostport:
+        host, port_str = hostport.rsplit(':', 1)
+    else:
+        host = hostport
+        port_str = None
+    return host, port_str
+
+
+def validate_proxy(proxy):
+    """Validate a proxy string and return a structured result dict.
+
+    Returns dict with keys:
+        valid (bool): True if proxy string is acceptable.
+        scheme (str|None): Normalised scheme (lowercase) or None.
+        user (str|None): Username if present.
+        password (str|None): Password if present.
+        host (str|None): Hostname or IP.
+        port (int|None): Port number or None.
+        error (str|None): Human-readable error when *valid* is False.
+        display (str): Standardised one-line representation of the proxy.
+    """
+    result = {
+        'valid': True, 'scheme': None, 'user': None, 'password': None,
+        'host': None, 'port': None, 'error': None, 'display': '',
+    }
+
+    if not proxy or not proxy.strip():
+        return result
+
+    proxy = proxy.strip()
+
+    # --- parse ---
+    try:
+        scheme, user, password, hostport = parse_proxy(proxy)
+    except ValueError as e:
+        result['valid'] = False
+        result['error'] = str(e)
+        return result
+
+    # --- scheme ---
+    if scheme is not None:
+        scheme = scheme.lower()
+        if scheme not in _VALID_PROXY_SCHEMES:
+            result['valid'] = False
+            result['error'] = "unsupported proxy scheme %r (expected one of: %s)" % (
+                scheme, ', '.join(sorted(_VALID_PROXY_SCHEMES)))
+            return result
+    result['scheme'] = scheme
+
+    # --- hostport ---
+    if not hostport:
+        result['valid'] = False
+        result['error'] = "proxy address is missing a host"
+        return result
+
+    try:
+        host, port_str = _split_hostport(hostport)
+    except ValueError as e:
+        result['valid'] = False
+        result['error'] = str(e)
+        return result
+
+    if not host:
+        result['valid'] = False
+        result['error'] = "proxy address is missing a host"
+        return result
+    result['host'] = host
+
+    # --- port ---
+    if port_str is not None:
+        try:
+            port = int(port_str)
+        except ValueError:
+            result['valid'] = False
+            result['error'] = "invalid proxy port %r (must be an integer)" % port_str
+            return result
+        if port < 1 or port > 65535:
+            result['valid'] = False
+            result['error'] = "proxy port %d out of range (1-65535)" % port
+            return result
+        result['port'] = port
+
+    result['user'] = user
+    result['password'] = password
+
+    # --- build display ---
+    result['display'] = format_proxy_display(result)
+    return result
+
+
+def format_proxy_display(info):
+    """Build a standardised one-line proxy string from a validate_proxy result.
+
+    *info* must be a dict returned by :func:`validate_proxy` (or one with the
+    same keys).  Returns ``""`` when the proxy is empty or invalid.
+    """
+    if not info.get('valid', False) or not info.get('host'):
+        return ''
+
+    parts = []
+    scheme = info.get('scheme')
+    if scheme:
+        parts.append('%s://' % scheme)
+
+    user = info.get('user')
+    password = info.get('password')
+    if user:
+        if password:
+            parts.append('%s:***@' % user)
+        else:
+            parts.append('%s@' % user)
+
+    host = info['host']
+    port = info.get('port')
+    if ':' in host:
+        # IPv6
+        parts.append('[%s]' % host)
+    else:
+        parts.append(host)
+
+    if port is not None:
+        parts.append(':%d' % port)
+
+    return ''.join(parts)
+
+
 def open_browser(url, parent=None, timestamp=0):
     logging.info("Opening URL {}".format(url))
     if not timestamp:

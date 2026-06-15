@@ -15,9 +15,9 @@
 
 import logging
 
-from gi.repository import Gio, Gtk, GObject, Pango
+from gi.repository import Gio, GLib, Gtk, GObject, Pango
 
-from .util import SecretService
+from .util import SecretService, validate_proxy, format_proxy_display
 
 try:
     import pacparser
@@ -109,6 +109,7 @@ class PreferencesPithosDialog(Gtk.Dialog):
     control_proxy_entry = Gtk.Template.Child()
     control_proxy_pac_entry = Gtk.Template.Child()
     explicit_content_filter_checkbutton = Gtk.Template.Child()
+    proxy_status_label = Gtk.Template.Child()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, use_header_bar=1, **kwargs)
@@ -132,6 +133,45 @@ class PreferencesPithosDialog(Gtk.Dialog):
         for key, val in settings_mapping.items():
             self.settings.bind(key, val[0], val[1],
                                Gio.SettingsBindFlags.DEFAULT|Gio.SettingsBindFlags.NO_SENSITIVITY)
+
+        self.proxy_entry.connect('changed', self._on_proxy_entry_changed)
+        self.control_proxy_entry.connect('changed', self._on_proxy_entry_changed)
+
+    def _on_proxy_entry_changed(self, entry):
+        """Validate proxy format on every keystroke and update visual feedback."""
+        text = entry.get_text()
+        if not text.strip():
+            entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, None)
+            entry.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, None)
+        else:
+            result = validate_proxy(text)
+            if result['valid']:
+                entry.set_icon_from_icon_name(
+                    Gtk.EntryIconPosition.SECONDARY, 'emblem-ok-symbolic')
+                entry.set_icon_tooltip_text(
+                    Gtk.EntryIconPosition.SECONDARY, result['display'])
+            else:
+                entry.set_icon_from_icon_name(
+                    Gtk.EntryIconPosition.SECONDARY, 'dialog-warning-symbolic')
+                entry.set_icon_tooltip_text(
+                    Gtk.EntryIconPosition.SECONDARY, result['error'])
+        self._update_proxy_status_label()
+
+    def _update_proxy_status_label(self):
+        """Refresh the proxy status label with standardised proxy summaries."""
+        lines = []
+        for label, entry in (('Proxy', self.proxy_entry),
+                              ('Control Proxy', self.control_proxy_entry)):
+            text = entry.get_text().strip()
+            if not text:
+                continue
+            result = validate_proxy(text)
+            if result['valid']:
+                lines.append('<small>%s: <b>%s</b></small>' % (label, GLib.markup_escape_text(result['display'])))
+            else:
+                lines.append('<small>%s: <span foreground="red">%s</span></small>' % (label, GLib.markup_escape_text(result['error'])))
+        self.proxy_status_label.set_markup('\n'.join(lines))
+        self.proxy_status_label.set_visible(bool(lines))
 
     def set_plugins(self, plugins):
         self.plugins_listbox.set_header_func(self.on_listbox_update_header)
@@ -184,6 +224,25 @@ class PreferencesPithosDialog(Gtk.Dialog):
 
     def do_response(self, response_id):
         if response_id == Gtk.ResponseType.APPLY:
+            # Validate proxy fields before saving.
+            for label, entry in (('Proxy URL', self.proxy_entry),
+                                  ('Control Proxy URL', self.control_proxy_entry)):
+                text = entry.get_text().strip()
+                if text:
+                    result = validate_proxy(text)
+                    if not result['valid']:
+                        dialog = Gtk.MessageDialog(
+                            parent=self,
+                            flags=Gtk.DialogFlags.MODAL,
+                            type=Gtk.MessageType.ERROR,
+                            buttons=Gtk.ButtonsType.OK,
+                            text=_('Invalid %s') % label,
+                            secondary_text=result['error'],
+                        )
+                        dialog.connect('response', lambda *ignore: dialog.destroy())
+                        dialog.show()
+                        return
+
             def cb(success):
                 if success:
                     self.settings.apply()
