@@ -74,8 +74,9 @@ class PithosPlugin(GObject.Object):
             self._enable()
 
     def on_error(self, error):
-        self.error = error
-        self.settings['enabled'] = False
+        self.error = str(error)
+        if hasattr(self, 'settings') and self.settings is not None:
+            self.settings['enabled'] = False
 
     def on_prepare(self):
         pass
@@ -88,31 +89,42 @@ class PithosPlugin(GObject.Object):
 
 
 class ErrorPlugin(PithosPlugin):
-    def __init__(self, name, error):
-        logging.error('Error loading plugin {}: {}'.format(name, error))
+    __gtype_name__ = 'PithosErrorPlugin'
+
+    def __init__(self, name, window, bus, error):
+        super().__init__(name, window, bus)
         self.prepared = True
-        self.error = error
-        self.name = name
-        self.enabled = False
+        self.error = str(error)
+        self.description = 'Error loading plugin: {}'.format(self.error)
+        logging.error('Error loading plugin %s: %s', name, self.error)
+
+
+def _import_plugin_module(name):
+    """Import and return the plugin submodule. Separated for testability."""
+    module = __import__('pithos.plugins.' + name)
+    return getattr(module.plugins, name)
 
 
 def load_plugin(name, window, bus):
     try:
-        module = __import__('pithos.plugins.' + name)
-        module = getattr(module.plugins, name)
-
-    except ImportError as e:
-        return ErrorPlugin(name, e.msg)
+        module = _import_plugin_module(name)
+    except Exception as e:
+        logging.exception('Failed to import plugin %s', name)
+        return ErrorPlugin(name, window, bus, 'Import failed: {}'.format(e))
 
     # find the class object for the actual plugin
     for key, item in module.__dict__.items():
-        if hasattr(item, '_PITHOS_PLUGIN') and key != "PithosPlugin":
+        if getattr(item, '_PITHOS_PLUGIN', False) and key != "PithosPlugin":
             plugin_class = item
             break
     else:
-        return ErrorPlugin(name, "Could not find module class")
+        return ErrorPlugin(name, window, bus, 'No PithosPlugin subclass found in module')
 
-    return plugin_class(name, window, bus)
+    try:
+        return plugin_class(name, window, bus)
+    except Exception as e:
+        logging.exception('Failed to instantiate plugin %s', name)
+        return ErrorPlugin(name, window, bus, 'Instantiation failed: {}'.format(e))
 
 
 def _maybe_migrate_setting(new_setting, name):

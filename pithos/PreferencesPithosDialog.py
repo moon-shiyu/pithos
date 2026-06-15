@@ -35,30 +35,48 @@ class PithosPluginRow(Gtk.ListBoxRow):
         self._friendly_name = plugin.name.title().replace('_', ' ')
 
         box = Gtk.Box()
-        label = Gtk.Label()
-        label.set_markup('<b>{}</b>\n{}'.format(self._friendly_name, plugin.description))
-        label.set_halign(Gtk.Align.START)
-        label.set_ellipsize(Pango.EllipsizeMode.END)
-        label.set_max_width_chars(30)
-        label.set_line_wrap(True)
-        label.set_lines(1)
-        box.pack_start(label, True, True, 4)
+        self.label = Gtk.Label()
+        self.label.set_halign(Gtk.Align.START)
+        self.label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.label.set_max_width_chars(30)
+        self.label.set_line_wrap(True)
 
         self.switch = Gtk.Switch()
-        plugin.settings.bind('enabled', self.switch, 'active', Gio.SettingsBindFlags.DEFAULT)
-        self.switch.connect('notify::active', self.on_activated)
         self.switch.set_valign(Gtk.Align.CENTER)
+
+        if plugin.error:
+            self._apply_error_state()
+        else:
+            self._apply_normal_state()
+
+        box.pack_start(self.label, True, True, 4)
         box.pack_end(self.switch, False, False, 2)
         self.connect('grab-focus', self.set_prefs_btn)
-        self.plugin.connect('notify::enabled', self.on_enabled)
-
-        if plugin.prepared and plugin.error:
-            self.set_sensitive(False)
-            self.set_tooltip_text(plugin.error)
-
         self.add(box)
 
+    def _apply_error_state(self):
+        """Display error info visibly and disable interaction."""
+        error_msg = str(self.plugin.error)
+        self.label.set_markup(
+            '<b>{}</b>\n<span foreground="red" size="small">{}</span>'.format(
+                self._friendly_name, error_msg))
+        self.label.set_lines(2)
+        self.switch.set_sensitive(False)
+        self.set_tooltip_text('Failed to load: {}'.format(error_msg))
+
+    def _apply_normal_state(self):
+        """Set up normal plugin row with bindings and signals."""
+        self.label.set_markup('<b>{}</b>\n{}'.format(
+            self._friendly_name, self.plugin.description))
+        self.label.set_lines(1)
+        self.plugin.settings.bind('enabled', self.switch, 'active',
+                                  Gio.SettingsBindFlags.DEFAULT)
+        self.switch.connect('notify::active', self.on_activated)
+        self.plugin.connect('notify::enabled', self.on_enabled)
+
     def on_enabled(self, *ignore):
+        if self.plugin.error:
+            return
         if self.is_selected():
             self.set_prefs_btn()
 
@@ -76,6 +94,9 @@ class PithosPluginRow(Gtk.ListBoxRow):
         prefs_btn.set_tooltip_text(tooltip)
 
     def on_activated(self, obj, params):
+        if self.plugin.error:
+            return
+
         if not self.is_selected():
             self.get_parent().select_row(self)
 
@@ -86,8 +107,7 @@ class PithosPluginRow(Gtk.ListBoxRow):
 
         if self.plugin.prepared and self.plugin.error:
             self.get_parent().unselect_row(self)
-            self.set_sensitive(False)
-            self.set_tooltip_text(self.plugin.error)
+            self._apply_error_state()
         elif self.plugin.prepared:
             self.set_prefs_btn()
 
