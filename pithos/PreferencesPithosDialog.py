@@ -17,7 +17,7 @@ import logging
 
 from gi.repository import Gio, Gtk, GObject, Pango
 
-from .util import SecretService
+from .util import SecretService, validate_proxy, validate_proxy_url
 
 try:
     import pacparser
@@ -160,6 +160,36 @@ class PreferencesPithosDialog(Gtk.Dialog):
         else:
             self.set_response_sensitive(Gtk.ResponseType.APPLY, True)
 
+    # -- Proxy real-time validation --
+
+    @Gtk.Template.Callback()
+    def on_proxy_changed(self, entry):
+        """Validate proxy_entry or control_proxy_entry on every keystroke."""
+        self._validate_proxy_entry(entry)
+
+    @Gtk.Template.Callback()
+    def on_proxy_pac_changed(self, entry):
+        """Validate control_proxy_pac_entry (PAC URL) on every keystroke."""
+        text = entry.get_text()
+        result = validate_proxy_url(text)
+        if result['valid']:
+            entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, None)
+            entry.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, None)
+        else:
+            entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, 'dialog-error')
+            entry.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, result['error'])
+
+    def _validate_proxy_entry(self, entry):
+        """Run validate_proxy on *entry* and update the secondary icon."""
+        text = entry.get_text()
+        result = validate_proxy(text)
+        if result['valid']:
+            entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, None)
+            entry.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, None)
+        else:
+            entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, 'dialog-error')
+            entry.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, result['error'])
+
     def on_listbox_update_header(self, row, before, junk=None):
         if before and not row.get_header():
             row.set_header(Gtk.Separator.new(Gtk.Orientation.HORIZONTAL))
@@ -184,33 +214,85 @@ class PreferencesPithosDialog(Gtk.Dialog):
 
     def do_response(self, response_id):
         if response_id == Gtk.ResponseType.APPLY:
-            def cb(success):
-                if success:
-                    self.settings.apply()
-                    self.emit('login-changed', (email, password))
-                else:
-                    # Should never really ever happen...
-                    # But just in case.
-                    self.settings.revert()
-                    self.show()
-                    dialog = Gtk.MessageDialog(
-                        parent=self,
-                        flags=Gtk.DialogFlags.MODAL,
-                        type=Gtk.MessageType.WARNING,
-                        buttons=Gtk.ButtonsType.OK,
-                        text=_('Failed to Store Your Pandora Credentials'),
-                        secondary_text=_('Please re-enter your email and password.'),
-                    )
+            # ---- proxy validation gate ----
+            proxy_checks = [
+                (self.proxy_entry, "Proxy URL"),
+                (self.control_proxy_entry, "Control Proxy URL"),
+            ]
+            errors = []
+            normalized_parts = []
+            for entry, label in proxy_checks:
+                result = validate_proxy(entry.get_text())
+                if not result['valid']:
+                    errors.append("{}: {}".format(label, result['error']))
+                elif result['normalized']:
+                    normalized_parts.append((label, result['normalized']))
 
-                    dialog.connect('response', lambda *ignore: dialog.destroy())
-                    dialog.show()
+            pac_result = validate_proxy_url(self.control_proxy_pac_entry.get_text())
+            if not pac_result['valid']:
+                errors.append("Control Proxy PAC: {}".format(pac_result['error']))
 
-            email = self.email_entry.get_text()
-            password = self.password_entry.get_text()
+            if errors:
+                dialog = Gtk.MessageDialog(
+                    parent=self,
+                    flags=Gtk.DialogFlags.MODAL,
+                    type=Gtk.MessageType.ERROR,
+                    buttons=Gtk.ButtonsType.OK,
+                    text="Invalid Proxy Configuration",
+                    secondary_text='\n'.join(errors),
+                )
+                dialog.run()
+                dialog.destroy()
+                return  # keep dialog open for the user to fix
 
-            if self.last_email != email or self.last_password != password:
-                SecretService.set_account_password(self.last_email, email, password, cb)
-            else:
-                self.settings.apply()
+            # ---- normalized-proxy confirmation ----
+            if normalized_parts:
+                lines = ['{}\n  {}'.format(lbl, norm) for lbl, norm in normalized_parts]
+                confirm = Gtk.MessageDialog(
+                    parent=self,
+                    flags=Gtk.DialogFlags.MODAL,
+                    type=Gtk.MessageType.QUESTION,
+                    buttons=Gtk.ButtonsType.OK_CANCEL,
+                    text="Save the following proxy configuration?",
+                    secondary_text='\n'.join(lines),
+                )
+                confirm_resp = confirm.run()
+                confirm.destroy()
+                if confirm_resp != Gtk.ResponseType.OK:
+                    return  # user cancelled — keep preferences open
+
+            # ---- credential store + apply ----
+            self._commit_settings()
         else:
             self.settings.revert()
+
+    def _commit_settings(self):
+        """Store credentials (if changed) and apply GSettings."""
+        email = self.email_entry.get_text()
+        password = self.password_entry.get_text()
+
+        def cb(success):
+            if success:
+                self.settings.apply()
+                self.emit('login-changed', (email, password))
+            else:
+                # Should never really ever happen...
+                # But just in case.
+                self.settings.revert()
+                self.show()
+                dialog = Gtk.MessageDialog(
+                    parent=self,
+                    flags=Gtk.DialogFlags.MODAL,
+                    type=Gtk.MessageType.WARNING,
+                    buttons=Gtk.ButtonsType.OK,
+                    text='Failed to Store Your Pandora Credentials',
+                    secondary_text='Please re-enter your email and password.',
+                )
+
+                dialog.connect('response', lambda *ignore: dialog.destroy())
+                dialog.show()
+
+        if self.last_email != email or self.last_password != password:
+            SecretService.set_account_password(self.last_email, email, password, cb)
+        else:
+            self.settings.apply()

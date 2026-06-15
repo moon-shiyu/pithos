@@ -224,6 +224,172 @@ def parse_proxy(proxy):
     return scheme, user, password, hostport
 
 
+_VALID_PROXY_SCHEMES = ('http', 'https', 'socks4', 'socks4a', 'socks5', 'socks5h')
+
+
+def validate_proxy(proxy):
+    """Validate a proxy string and return a structured result.
+
+    Returns a dict with:
+        valid (bool):       True if the proxy is valid (or empty).
+        error (str|None):   Error message when invalid, else None.
+        normalized (str):   Standardized proxy string (empty when invalid).
+        scheme (str|None):  Parsed scheme (lowercased).
+        user (str|None):    Parsed username.
+        password (str|None): Parsed password.
+        host (str|None):    Parsed hostname / IP.
+        port (int|None):    Parsed port number.
+    """
+    result = {
+        'valid': True,
+        'error': None,
+        'normalized': '',
+        'scheme': None,
+        'user': None,
+        'password': None,
+        'host': None,
+        'port': None,
+    }
+
+    if not proxy or not proxy.strip():
+        return result
+
+    proxy = proxy.strip()
+
+    if ' ' in proxy or '\t' in proxy or '\n' in proxy:
+        result['valid'] = False
+        result['error'] = "Proxy address must not contain whitespace"
+        return result
+
+    try:
+        scheme, user, password, hostport = parse_proxy(proxy)
+    except ValueError as e:
+        result['valid'] = False
+        result['error'] = str(e)
+        return result
+
+    # --- scheme ---
+    if scheme is not None:
+        scheme_lower = scheme.lower()
+        if scheme_lower not in _VALID_PROXY_SCHEMES:
+            result['valid'] = False
+            result['error'] = (
+                "Invalid scheme '{}'. Expected one of: {}".format(
+                    scheme, ', '.join(_VALID_PROXY_SCHEMES)
+                )
+            )
+            return result
+        scheme = scheme_lower
+    # scheme may be None (bare authority like host:port) — that is acceptable.
+
+    # --- hostport ---
+    if not hostport:
+        result['valid'] = False
+        result['error'] = "Proxy address is missing a host"
+        return result
+
+    # Bracket-aware split for IPv6 (e.g. [::1]:8080)
+    if hostport.startswith('['):
+        bracket_end = hostport.find(']')
+        if bracket_end == -1:
+            result['valid'] = False
+            result['error'] = "Unclosed bracket in host"
+            return result
+        host = hostport[:bracket_end + 1]
+        rest = hostport[bracket_end + 1:]
+        if rest.startswith(':'):
+            port_str = rest[1:]
+        elif rest == '':
+            port_str = None
+        else:
+            result['valid'] = False
+            result['error'] = "Unexpected characters after host: '{}'".format(rest)
+            return result
+    else:
+        colon = hostport.rfind(':')
+        if colon != -1:
+            host = hostport[:colon]
+            port_str = hostport[colon + 1:] or None
+        else:
+            host = hostport
+            port_str = None
+
+    if not host:
+        result['valid'] = False
+        result['error'] = "Proxy address is missing a host"
+        return result
+
+    port = None
+    if port_str is not None:
+        try:
+            port = int(port_str)
+        except ValueError:
+            result['valid'] = False
+            result['error'] = "Invalid port number: '{}'".format(port_str)
+            return result
+        if port < 1 or port > 65535:
+            result['valid'] = False
+            result['error'] = "Port must be between 1 and 65535 (got {})".format(port)
+            return result
+
+    # --- build normalized form ---
+    norm_scheme = scheme if scheme is not None else 'http'
+    host_display = host.lower()
+
+    normalized = norm_scheme + '://'
+    if user is not None:
+        normalized += user
+        if password is not None:
+            normalized += ':' + password
+        normalized += '@'
+    normalized += host_display
+    if port is not None:
+        normalized += ':' + str(port)
+
+    result['normalized'] = normalized
+    result['scheme'] = scheme
+    result['user'] = user
+    result['password'] = password
+    result['host'] = host_display
+    result['port'] = port
+    return result
+
+
+def validate_proxy_url(url):
+    """Validate a PAC (or general HTTP/HTTPS) URL.
+
+    Returns a dict with:
+        valid (bool):     True if the URL looks valid.
+        error (str|None): Error message when invalid, else None.
+    """
+    result = {'valid': True, 'error': None}
+
+    if not url or not url.strip():
+        return result
+
+    url = url.strip()
+
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        result['valid'] = False
+        result['error'] = "Invalid URL format"
+        return result
+
+    if parsed.scheme not in ('http', 'https'):
+        result['valid'] = False
+        result['error'] = "URL must start with http:// or https://"
+        return result
+
+    if not parsed.netloc:
+        result['valid'] = False
+        result['error'] = "URL is missing a hostname"
+        return result
+
+    return result
+
+
 def open_browser(url, parent=None, timestamp=0):
     logging.info("Opening URL {}".format(url))
     if not timestamp:
