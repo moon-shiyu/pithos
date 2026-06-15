@@ -89,20 +89,29 @@ class PithosPlugin(GObject.Object):
 
 class ErrorPlugin(PithosPlugin):
     def __init__(self, name, error):
+        super().__init__(name, window=None, bus=None)
         logging.error('Error loading plugin {}: {}'.format(name, error))
         self.prepared = True
-        self.error = error
-        self.name = name
-        self.enabled = False
+        self.error = str(error)
+        self._enabled = False
+        self.description = 'Error: {}'.format(self.error)
+
+    def enable(self):
+        logging.warning('Cannot enable plugin {}: {}'.format(self.name, self.error))
+
+    def disable(self):
+        pass
+
+    def on_error(self, error):
+        self.error = str(error)
 
 
 def load_plugin(name, window, bus):
     try:
         module = __import__('pithos.plugins.' + name)
         module = getattr(module.plugins, name)
-
-    except ImportError as e:
-        return ErrorPlugin(name, e.msg)
+    except Exception as e:
+        return ErrorPlugin(name, str(e))
 
     # find the class object for the actual plugin
     for key, item in module.__dict__.items():
@@ -110,9 +119,12 @@ def load_plugin(name, window, bus):
             plugin_class = item
             break
     else:
-        return ErrorPlugin(name, "Could not find module class")
+        return ErrorPlugin(name, "Could not find plugin class in module")
 
-    return plugin_class(name, window, bus)
+    try:
+        return plugin_class(name, window, bus)
+    except Exception as e:
+        return ErrorPlugin(name, str(e))
 
 
 def _maybe_migrate_setting(new_setting, name):
@@ -143,24 +155,35 @@ def load_plugins(window):
         discovered_plugins.sort()
 
         for name in discovered_plugins:
-            if name not in plugins:
-                plugin = plugins[name] = load_plugin(name, window, bus)
-            else:
-                plugin = plugins[name]
+            try:
+                if name not in plugins:
+                    plugin = plugins[name] = load_plugin(name, window, bus)
+                else:
+                    plugin = plugins[name]
 
-            settings_name = name.replace('_', '-')
-            if settings_name in in_tree_plugins:
-                plugin.settings = settings.get_child(settings_name)
-                _maybe_migrate_setting(plugin.settings, name)
-            else:
-                # Out of tree plugin
-                plugin.settings = Gio.Settings.new_with_path('io.github.Pithos.plugin',
-                                                         '/io/github/Pithos/{}/'.format(settings_name))
+                settings_name = name.replace('_', '-')
+                if settings_name in in_tree_plugins:
+                    plugin.settings = settings.get_child(settings_name)
+                    _maybe_migrate_setting(plugin.settings, name)
+                else:
+                    # Out of tree plugin
+                    plugin.settings = Gio.Settings.new_with_path('io.github.Pithos.plugin',
+                                                             '/io/github/Pithos/{}/'.format(settings_name))
 
-            if plugin.settings['enabled']:
-                plugin.enable()
-            else:
-                plugin.disable()
+                if plugin.settings['enabled']:
+                    plugin.enable()
+                else:
+                    plugin.disable()
+            except Exception as e:
+                logging.error('Failed to load or enable plugin {}: {}'.format(name, e))
+                plugin = ErrorPlugin(name, str(e))
+                settings_name = name.replace('_', '-')
+                if settings_name in in_tree_plugins:
+                    plugin.settings = settings.get_child(settings_name)
+                else:
+                    plugin.settings = Gio.Settings.new_with_path('io.github.Pithos.plugin',
+                                                             '/io/github/Pithos/{}/'.format(settings_name))
+                plugins[name] = plugin
 
         window.prefs_dlg.set_plugins(window.plugins)
 

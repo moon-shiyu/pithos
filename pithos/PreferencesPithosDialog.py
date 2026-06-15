@@ -15,7 +15,7 @@
 
 import logging
 
-from gi.repository import Gio, Gtk, GObject, Pango
+from gi.repository import GLib, Gio, Gtk, GObject, Pango
 
 from .util import SecretService
 
@@ -33,29 +33,40 @@ class PithosPluginRow(Gtk.ListBoxRow):
 
         self.plugin = plugin
         self._friendly_name = plugin.name.title().replace('_', ' ')
+        is_error = plugin.prepared and plugin.error
 
         box = Gtk.Box()
-        label = Gtk.Label()
-        label.set_markup('<b>{}</b>\n{}'.format(self._friendly_name, plugin.description))
-        label.set_halign(Gtk.Align.START)
-        label.set_ellipsize(Pango.EllipsizeMode.END)
-        label.set_max_width_chars(30)
-        label.set_line_wrap(True)
-        label.set_lines(1)
-        box.pack_start(label, True, True, 4)
+        self.label = Gtk.Label()
+        self.label.set_halign(Gtk.Align.START)
+        self.label.set_max_width_chars(30)
+        self.label.set_line_wrap(True)
+        self.label.set_lines(2)
+        self.label.set_ellipsize(Pango.EllipsizeMode.END)
+
+        if is_error:
+            escaped_error = GLib.markup_escape_text(str(plugin.error))
+            self.label.set_markup(
+                '<b>{}</b>\n<span foreground="red" size="small">Error: {}</span>'.format(
+                    self._friendly_name, escaped_error))
+            self.set_tooltip_text(str(plugin.error))
+        else:
+            self.label.set_markup('<b>{}</b>\n{}'.format(self._friendly_name, plugin.description))
+
+        box.pack_start(self.label, True, True, 4)
 
         self.switch = Gtk.Switch()
-        plugin.settings.bind('enabled', self.switch, 'active', Gio.SettingsBindFlags.DEFAULT)
-        self.switch.connect('notify::active', self.on_activated)
         self.switch.set_valign(Gtk.Align.CENTER)
+
+        if is_error:
+            self.switch.set_active(False)
+            self.switch.set_sensitive(False)
+        else:
+            plugin.settings.bind('enabled', self.switch, 'active', Gio.SettingsBindFlags.DEFAULT)
+            self.switch.connect('notify::active', self.on_activated)
+            self.connect('grab-focus', self.set_prefs_btn)
+            self.plugin.connect('notify::enabled', self.on_enabled)
+
         box.pack_end(self.switch, False, False, 2)
-        self.connect('grab-focus', self.set_prefs_btn)
-        self.plugin.connect('notify::enabled', self.on_enabled)
-
-        if plugin.prepared and plugin.error:
-            self.set_sensitive(False)
-            self.set_tooltip_text(plugin.error)
-
         self.add(box)
 
     def on_enabled(self, *ignore):
@@ -86,8 +97,12 @@ class PithosPluginRow(Gtk.ListBoxRow):
 
         if self.plugin.prepared and self.plugin.error:
             self.get_parent().unselect_row(self)
-            self.set_sensitive(False)
-            self.set_tooltip_text(self.plugin.error)
+            self.switch.set_sensitive(False)
+            escaped_error = GLib.markup_escape_text(str(self.plugin.error))
+            self.label.set_markup(
+                '<b>{}</b>\n<span foreground="red" size="small">Error: {}</span>'.format(
+                    self._friendly_name, escaped_error))
+            self.set_tooltip_text(str(self.plugin.error))
         elif self.plugin.prepared:
             self.set_prefs_btn()
 
