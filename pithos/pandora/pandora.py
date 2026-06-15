@@ -361,6 +361,30 @@ class Pandora:
 
         return l
 
+    def search_grouped(self, query):
+        """Search and return results grouped by type.
+
+        Returns a dict with keys 'artists', 'songs', 'genres', each containing
+        a list of SearchResult objects sorted by score (descending).
+        Artists and songs with score < 80 are excluded.
+        """
+        results = self.json_call(
+            'music.search',
+            {'includeGenreStations': True, 'includeNearMatches': True, 'searchText': query},
+        )
+
+        artists = sorted(
+            [SearchResult('artist', i) for i in results['artists'] if i['score'] >= 80],
+            key=lambda r: r.score, reverse=True,
+        )
+        songs = sorted(
+            [SearchResult('song', i) for i in results['songs'] if i['score'] >= 80],
+            key=lambda r: r.score, reverse=True,
+        )
+        genres = [SearchResult('genre', i) for i in results.get('genreStations', [])]
+
+        return {'artists': artists, 'songs': songs, 'genres': genres}
+
     def add_station_by_music_id(self, musicid):
         d = self.json_call('station.createStation', {'musicToken': musicid})
         station = Station(self, d)

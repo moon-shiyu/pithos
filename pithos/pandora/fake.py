@@ -73,9 +73,17 @@ class FakePandora(Pandora):
         elif method == 'music.search':
             return {'artists': [
                         {'score':90, 'musicToken':'988', 'artistName':"artistName"},
+                        {'score':85, 'musicToken':'989', 'artistName':"SecondArtist"},
+                        {'score':70, 'musicToken':'990', 'artistName':"LowScoreArtist"},
                     ],
                     'songs':[
                         {'score':80, 'musicToken':'238', 'songName':"SongName", 'artistName':"ArtistName"},
+                        {'score':95, 'musicToken':'239', 'songName':"TopSong", 'artistName':"TopArtist"},
+                        {'score':60, 'musicToken':'240', 'songName':"LowSong", 'artistName':"LowArtist"},
+                    ],
+                    'genreStations':[
+                        {'score':100, 'musicToken':'g100', 'stationName':"Rock"},
+                        {'score':90, 'musicToken':'g101', 'stationName':"Jazz"},
                     ],
                    }
         elif method == 'station.createStation':
