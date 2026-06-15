@@ -64,6 +64,9 @@ TEXT_X_PADDING = 12
 # 15 days in seconds to retain album art files.
 ART_CACHE_TIME = 1.296e+6
 
+# Minimum seconds of continuous buffering before showing the percentage in the UI.
+BUFFERING_DISPLAY_THRESHOLD = 1.0
+
 FALLBACK_BLACK = Gdk.RGBA(red=0.0, green=0.0, blue=0.0, alpha=1.0)
 FALLBACK_WHITE = Gdk.RGBA(red=1.0, green=1.0, blue=1.0, alpha=1.0)
 
@@ -223,6 +226,8 @@ class PithosWindow(Gtk.ApplicationWindow):
         "user-changed-play-state": (GObject.SignalFlags.RUN_FIRST, None, (GObject.TYPE_BOOLEAN,)),
         "metadata-changed": (GObject.SignalFlags.RUN_FIRST, None, (GObject.TYPE_PYOBJECT,)),
         "buffering-finished": (GObject.SignalFlags.RUN_FIRST, None, (GObject.TYPE_PYOBJECT,)),
+        "buffering-started": (GObject.SignalFlags.RUN_FIRST, None, (GObject.TYPE_PYOBJECT,)),
+        "buffering-progress": (GObject.SignalFlags.RUN_FIRST, None, (GObject.TYPE_PYOBJECT,)),
         "station-changed": (GObject.SignalFlags.RUN_FIRST, None, (GObject.TYPE_PYOBJECT,)),
         "stations-processed": (GObject.SignalFlags.RUN_FIRST, None, (GObject.TYPE_PYOBJECT,)),
         "station-added": (GObject.SignalFlags.RUN_FIRST, None, (GObject.TYPE_PYOBJECT,)),
@@ -345,6 +350,8 @@ class PithosWindow(Gtk.ApplicationWindow):
 
         self._current_state = PseudoGst.STOPPED
         self._buffer_recovery_state = PseudoGst.STOPPED
+        self._buffering_percent = 0
+        self._buffering_start_time = None
 
         self.current_song_index = None
         self.current_station = None
@@ -758,6 +765,7 @@ class PithosWindow(Gtk.ApplicationWindow):
         self.player.set_property('buffer-size', int(song.bitrate) * 375)
         self.player.set_property('connection-speed', int(song.bitrate))
         self.player.set_property("uri", audioUrl)
+        self._buffering_start_time = time.time()
         self._set_player_state(PseudoGst.BUFFERING)
         self.playcount += 1
 
@@ -791,6 +799,7 @@ class PithosWindow(Gtk.ApplicationWindow):
                 self.destroy_ui_loop()
         if target is not PseudoGst.BUFFERING:
             self._buffer_recovery_state = target
+            self._buffering_start_time = None
         self.update_song_row()
         return True
 
@@ -1080,8 +1089,10 @@ class PithosWindow(Gtk.ApplicationWindow):
     def query_buffer(self):
         buffer_stat = self.player.query(self._query_buffer)
         if buffer_stat:
-            return self._query_buffer.parse_buffering_percent()[0]
+            buffering_active, self._buffering_percent = self._query_buffer.parse_buffering_percent()
+            return buffering_active
         else:
+            self._buffering_percent = 0
             return True
 
     def on_gst_stream_start(self, bus, message):
@@ -1161,6 +1172,22 @@ class PithosWindow(Gtk.ApplicationWindow):
             logging.debug("Buffer underrun")
             if self._set_player_state(PseudoGst.BUFFERING):
                 logging.debug("Pausing pipeline")
+
+        if buffering and self._current_state is PseudoGst.BUFFERING:
+            # Record the start of a buffering episode on first detection.
+            if self._buffering_start_time is None:
+                self._buffering_start_time = time.time()
+                self.emit('buffering-started', self._buffering_percent)
+            # Push/update buffering percentage on the statusbar.
+            ctx_id = self.statusbar.get_context_id('buffering')
+            self.statusbar.pop(ctx_id)
+            self.statusbar.push(ctx_id, _('Buffering… {}%').format(self._buffering_percent))
+            # Emit progress signal for plugins (e.g. MPRIS).
+            self.emit('buffering-progress', self._buffering_percent)
+            # Refresh the song row so the percentage is visible immediately
+            # rather than waiting for the 1-second UI loop tick.
+            self.update_song_row()
+
         elif not buffering and self._current_state is PseudoGst.BUFFERING:
             logging.debug("Buffer overrun")
             if self._buffer_recovery_state is PseudoGst.STOPPED:
@@ -1172,9 +1199,12 @@ class PithosWindow(Gtk.ApplicationWindow):
             elif self._buffer_recovery_state is PseudoGst.PAUSED:
                 if self._set_player_state(PseudoGst.PAUSED, change_gst_state=True):
                     logging.debug("User paused")
+            # Clear the buffering statusbar message.
+            self.statusbar.pop(self.statusbar.get_context_id('buffering'))
             # Tell everyone to update their clocks after we're done buffering or
             # in case it takes a while after the song-changed signal for actual playback to begin.
             self.emit('buffering-finished', self.query_position() or 0)
+            self.update_song_row()
         return buffering
 
     def set_volume_cb(self, volume):
@@ -1214,7 +1244,11 @@ class PithosWindow(Gtk.ApplicationWindow):
                 if self.playing is False:
                     msg.append("Paused")
             if self._current_state is PseudoGst.BUFFERING:
-                msg.append("Buffering…")
+                if (self._buffering_start_time is not None
+                        and (time.time() - self._buffering_start_time) >= BUFFERING_DISPLAY_THRESHOLD):
+                    msg.append(_('Buffering… {}%').format(self._buffering_percent))
+                else:
+                    msg.append(_('Buffering…'))
         if song.message:
             msg.append(song.message)
         msg = " - ".join(msg)
