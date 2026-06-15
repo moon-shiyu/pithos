@@ -360,6 +360,9 @@ class PithosWindow(Gtk.ApplicationWindow):
         self.waiting_for_playlist = False
         self.start_new_playlist = False
         self.buffering_timer_id = 0
+        self._buffering_start_time = 0
+        self._buffering_percent = 0
+        self._buffering_ui_timer_id = 0
         self.ui_loop_timer_id = 0
         self.playlist_update_timer_id = 0
         display = self.props.screen.get_display()
@@ -1080,7 +1083,9 @@ class PithosWindow(Gtk.ApplicationWindow):
     def query_buffer(self):
         buffer_stat = self.player.query(self._query_buffer)
         if buffer_stat:
-            return self._query_buffer.parse_buffering_percent()[0]
+            busy, percent = self._query_buffer.parse_buffering_percent()
+            self._buffering_percent = percent
+            return busy
         else:
             return True
 
@@ -1143,6 +1148,10 @@ class PithosWindow(Gtk.ApplicationWindow):
             self.buffering_timer_id = 0
         self.buffering_timer_id = GLib.timeout_add(200, self.react_to_buffering_message, True)
 
+    # Minimum seconds of continuous buffering before showing the indicator in the UI.
+    # Brief buffering blips (< threshold) are silent to avoid flickering.
+    BUFFERING_DISPLAY_THRESHOLD_SECS = 0.5
+
     def react_to_buffering_message(self, from_timeout):
         # If the pipeline signals that it is buffering set the player to PseudoGst.BUFFERING
         # (which is an alias to Gst.State.PAUSED). During buffering if the user goes to Pause
@@ -1159,10 +1168,15 @@ class PithosWindow(Gtk.ApplicationWindow):
 
         if buffering and self._current_state is not PseudoGst.BUFFERING:
             logging.debug("Buffer underrun")
+            self._buffering_start_time = time.time()
+            self._start_buffering_ui()
             if self._set_player_state(PseudoGst.BUFFERING):
                 logging.debug("Pausing pipeline")
         elif not buffering and self._current_state is PseudoGst.BUFFERING:
             logging.debug("Buffer overrun")
+            self._stop_buffering_ui()
+            self._buffering_start_time = 0
+            self._buffering_percent = 0
             if self._buffer_recovery_state is PseudoGst.STOPPED:
                 self.play(change_gst_state=True)
                 logging.debug("Song starting")
@@ -1175,7 +1189,42 @@ class PithosWindow(Gtk.ApplicationWindow):
             # Tell everyone to update their clocks after we're done buffering or
             # in case it takes a while after the song-changed signal for actual playback to begin.
             self.emit('buffering-finished', self.query_position() or 0)
+        elif buffering and self._current_state is PseudoGst.BUFFERING:
+            # Still buffering – refresh the UI so the percentage stays current.
+            self._update_buffering_ui()
         return buffering
+
+    def _start_buffering_ui(self):
+        """Start a periodic timer that refreshes the buffering indicator."""
+        if not self._buffering_ui_timer_id:
+            self._buffering_ui_timer_id = GLib.timeout_add(300, self._on_buffering_ui_tick)
+
+    def _stop_buffering_ui(self):
+        """Stop the buffering UI timer and clear the statusbar message."""
+        if self._buffering_ui_timer_id:
+            GLib.source_remove(self._buffering_ui_timer_id)
+            self._buffering_ui_timer_id = 0
+        self.statusbar.pop(self.statusbar.get_context_id('buffering'))
+
+    def _on_buffering_ui_tick(self):
+        """GLib timer callback: refresh the buffering display periodically."""
+        if self._current_state is not PseudoGst.BUFFERING:
+            self._buffering_ui_timer_id = 0
+            return False  # stop the timer
+        self._update_buffering_ui()
+        return True  # keep ticking
+
+    def _update_buffering_ui(self):
+        """Push the current buffering percentage to the statusbar and song row."""
+        if self._buffering_start_time == 0:
+            return
+        elapsed = time.time() - self._buffering_start_time
+        if elapsed < self.BUFFERING_DISPLAY_THRESHOLD_SECS:
+            return
+        ctx = self.statusbar.get_context_id('buffering')
+        self.statusbar.pop(ctx)
+        self.statusbar.push(ctx, "\u6b63\u5728\u7f13\u51b2 (%d%%)" % self._buffering_percent)
+        self.update_song_row()
 
     def set_volume_cb(self, volume):
         # Convert to the cubic scale that the volume slider uses
@@ -1214,7 +1263,11 @@ class PithosWindow(Gtk.ApplicationWindow):
                 if self.playing is False:
                     msg.append("Paused")
             if self._current_state is PseudoGst.BUFFERING:
-                msg.append("Buffering…")
+                elapsed = time.time() - self._buffering_start_time if self._buffering_start_time else 0
+                if elapsed >= self.BUFFERING_DISPLAY_THRESHOLD_SECS:
+                    msg.append("正在缓冲 (%d%%)" % self._buffering_percent)
+                else:
+                    msg.append("Buffering…")
         if song.message:
             msg.append(song.message)
         msg = " - ".join(msg)
