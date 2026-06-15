@@ -356,7 +356,7 @@ class Pandora:
 
         l = [SearchResult('artist', i) for i in results['artists'] if i['score'] >= 80]
         l += [SearchResult('song', i) for i in results['songs'] if i['score'] >= 80]
-        l += [SearchResult('genre', i) for i in results['genreStations']]
+        l += [SearchResult('genre', i) for i in results.get('genreStations', [])]
         l.sort(key=lambda i: i.score, reverse=True)
 
         return l
@@ -606,4 +606,31 @@ class SearchResult:
             self.name = d['artistName']
         elif resultType == 'genre':
             self.stationName = d['stationName']
+
+
+# Display order and labels for grouped search results
+SEARCH_RESULT_TYPE_ORDER = ['artist', 'song', 'genre']
+SEARCH_RESULT_TYPE_LABELS = {
+    'artist': 'Artists',
+    'song': 'Songs',
+    'genre': 'Stations',
+}
+
+
+def group_search_results(results):
+    """Group a flat list of SearchResult objects by resultType.
+
+    Returns a list of (label, [SearchResult, ...]) tuples in display order.
+    Empty groups are omitted. Order within each group is preserved from input.
+    """
+    groups = {t: [] for t in SEARCH_RESULT_TYPE_ORDER}
+    for r in results:
+        if r.resultType in groups:
+            groups[r.resultType].append(r)
+
+    return [
+        (SEARCH_RESULT_TYPE_LABELS[t], groups[t])
+        for t in SEARCH_RESULT_TYPE_ORDER
+        if groups[t]
+    ]
 

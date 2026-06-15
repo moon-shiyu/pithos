@@ -14,6 +14,7 @@
 
 import html
 from gi.repository import GObject, Gtk
+from .pandora.pandora import group_search_results
 
 
 @Gtk.Template(resource_path='/io/github/Pithos/ui/SearchDialog.ui')
@@ -42,7 +43,9 @@ class SearchDialog(Gtk.Dialog):
     def get_selected(self):
         sel = self.treeview.get_selection().get_selected()
         if sel[1]:
-            return self.treeview.get_model().get_value(sel[1], 0)
+            val = self.treeview.get_model().get_value(sel[1], 0)
+            if val is not None:
+                return val
 
     def search(self, query):
         self.query = query
@@ -57,17 +60,23 @@ class SearchDialog(Gtk.Dialog):
             if not self.query:
                 return
 
-            for i in results:
-                if i.resultType == 'song':
-                    mk = '<b>{}</b> by {}'.format(html.escape(i.title), html.escape(i.artist))
-                elif i.resultType == 'artist':
-                    mk = '<b>{}</b> (artist)'.format(html.escape(i.name))
-                elif i.resultType == 'genre':
-                    mk = '<b>{}</b> (genre)'.format(html.escape(i.stationName))
-                self.model.append((i, mk))
+            for label, group in group_search_results(results):
+                header_mk = '<span size="small" weight="bold" foreground="#888888">{}</span>'.format(
+                    html.escape(label)
+                )
+                self.model.append((None, header_mk))
+                for i in group:
+                    if i.resultType == 'song':
+                        mk = '    <b>{}</b> by {}'.format(html.escape(i.title), html.escape(i.artist))
+                    elif i.resultType == 'artist':
+                        mk = '    <b>{}</b>'.format(html.escape(i.name))
+                    elif i.resultType == 'genre':
+                        mk = '    <b>{}</b>'.format(html.escape(i.stationName))
+                    self.model.append((i, mk))
             self.treeview.show()
         self.worker_run('search', (self.query,), callback, "Searching...")
 
+    @Gtk.Template.Callback()
     def cursor_changed(self, *ignore):
         self.result = self.get_selected()
-        self.set_response_sensitive(Gtk.ResponseType.OK, not not self.result)
+        self.set_response_sensitive(Gtk.ResponseType.OK, self.result is not None)
