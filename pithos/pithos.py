@@ -43,6 +43,7 @@ from .gobject_worker import GObjectWorker
 from .pandora import *
 from .pandora.data import *
 from .plugin import load_plugins
+from .song_format import safe_title, safe_artist, safe_album, rating_icon, window_title
 from .util import parse_proxy, open_browser, SecretService, popup_at_pointer, is_flatpak
 from .migrate_settings import maybe_migrate_settings
 
@@ -764,7 +765,7 @@ class PithosWindow(Gtk.ApplicationWindow):
         self.current_song.start_time = time.time()
         self.songs_treeview.scroll_to_cell(song_index, use_align=True, row_align = 1.0)
         self.songs_treeview.set_cursor(song_index, None, 0)
-        self.set_title("%s by %s - Pithos" % (song.title, song.artist))
+        self.set_title(window_title(song))
 
         self.update_song_row()
 
@@ -1199,9 +1200,9 @@ class PithosWindow(Gtk.ApplicationWindow):
             soup.proxy_pw = password
 
     def song_text(self, song):
-        title = html.escape(song.title)
-        artist = html.escape(song.artist)
-        album = html.escape(song.album)
+        title = html.escape(safe_title(song))
+        artist = html.escape(safe_artist(song))
+        album = html.escape(safe_album(song))
         msg = []
         if song is self.current_song:
             song.position = self.query_position()
@@ -1230,13 +1231,7 @@ class PithosWindow(Gtk.ApplicationWindow):
 
     @staticmethod
     def song_icon(song):
-        if song.tired:
-            return 'tired'
-        if song.rating == RATE_LOVE:
-            return 'love'
-        if song.rating == RATE_BAN:
-            return 'ban'
-        return None
+        return rating_icon(song)
 
     def update_song_row(self, song = None):
         if song is None:

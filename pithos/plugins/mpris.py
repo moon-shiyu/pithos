@@ -34,6 +34,7 @@ from .dbus_util.DBusServiceObject import (
 )
 
 from pithos.plugin import PithosPlugin
+from pithos.song_format import safe_title, safe_album, mpris_artist_list, mpris_rating_text
 
 
 class MprisPlugin(PithosPlugin):
@@ -400,14 +401,14 @@ class PithosMprisService(DBusServiceObject):
         # Map pithos ratings to something MPRIS understands
         userRating = 1.0 if song.rating == 'love' else 0.0
         duration = song.get_duration_sec() * 1000000
-        pithos_rating = window.song_icon(song) or ''
+        pithos_rating = mpris_rating_text(song)
         trackid = self._track_id_from_song(song)
 
         metadata = {
             'mpris:trackid': GLib.Variant('o', trackid),
-            'xesam:title': GLib.Variant('s', song.title or 'Title Unknown'),
-            'xesam:artist': GLib.Variant('as', [song.artist] or ['Artist Unknown']),
-            'xesam:album': GLib.Variant('s', song.album or 'Album Unknown'),
+            'xesam:title': GLib.Variant('s', safe_title(song)),
+            'xesam:artist': GLib.Variant('as', mpris_artist_list(song)),
+            'xesam:album': GLib.Variant('s', safe_album(song)),
             'xesam:userRating': GLib.Variant('d', userRating),
             'xesam:url': GLib.Variant('s', song.audioUrl),
             'mpris:length': GLib.Variant('x', duration),
