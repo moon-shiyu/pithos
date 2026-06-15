@@ -17,6 +17,7 @@ import os
 from gi.repository import Gio
 
 from pithos.plugin import PithosPlugin
+from pithos.song_format import format_notification_title, format_notification_body
 from pithos.util import is_flatpak
 
 
@@ -54,10 +55,10 @@ class NotifyPlugin(PithosPlugin):
         else:
             song = window.current_song
             # This matches GNOME-Shell's format
-            notification = Gio.Notification.new(song.artist)
+            notification = Gio.Notification.new(format_notification_title(song))
             # GNOME focuses the application by default, we want to match that behavior elsewhere such as on KDE.
             notification.set_default_action('app.activate')
-            notification.set_body(song.title)
+            notification.set_body(format_notification_body(song))
 
             if song.artUrl:
                 icon = Gio.FileIcon.new(Gio.File.new_for_uri(song.artUrl))

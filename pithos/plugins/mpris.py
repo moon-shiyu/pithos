@@ -34,6 +34,7 @@ from .dbus_util.DBusServiceObject import (
 )
 
 from pithos.plugin import PithosPlugin
+from pithos.song_format import rating_label
 
 
 class MprisPlugin(PithosPlugin):
@@ -401,6 +402,9 @@ class PithosMprisService(DBusServiceObject):
         userRating = 1.0 if song.rating == 'love' else 0.0
         duration = song.get_duration_sec() * 1000000
         pithos_rating = window.song_icon(song) or ''
+        # Use the shared formatting function so MPRIS clients see the same
+        # human-readable rating label as desktop notifications.
+        pithos_rating_label = rating_label(song)
         trackid = self._track_id_from_song(song)
 
         metadata = {
@@ -412,6 +416,7 @@ class PithosMprisService(DBusServiceObject):
             'xesam:url': GLib.Variant('s', song.audioUrl),
             'mpris:length': GLib.Variant('x', duration),
             'pithos:rating': GLib.Variant('s', pithos_rating),
+            'pithos:ratingLabel': GLib.Variant('s', pithos_rating_label),
         }
 
         # If we don't have an artUrl the best thing we can

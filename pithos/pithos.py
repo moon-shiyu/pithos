@@ -43,6 +43,7 @@ from .gobject_worker import GObjectWorker
 from .pandora import *
 from .pandora.data import *
 from .plugin import load_plugins
+from .song_format import format_window_title, format_pulse_media_name
 from .util import parse_proxy, open_browser, SecretService, popup_at_pointer, is_flatpak
 from .migrate_settings import maybe_migrate_settings
 
@@ -753,7 +754,7 @@ class PithosWindow(Gtk.ApplicationWindow):
         audioUrl = song.audioUrl
         os.environ['PULSE_PROP_media.title'] = song.title
         os.environ['PULSE_PROP_media.artist'] = song.artist
-        os.environ['PULSE_PROP_media.name'] = '{}: {}'.format(song.artist, song.title)
+        os.environ['PULSE_PROP_media.name'] = format_pulse_media_name(song)
         os.environ['PULSE_PROP_media.filename'] = audioUrl
         self.player.set_property('buffer-size', int(song.bitrate) * 375)
         self.player.set_property('connection-speed', int(song.bitrate))
@@ -764,7 +765,7 @@ class PithosWindow(Gtk.ApplicationWindow):
         self.current_song.start_time = time.time()
         self.songs_treeview.scroll_to_cell(song_index, use_align=True, row_align = 1.0)
         self.songs_treeview.set_cursor(song_index, None, 0)
-        self.set_title("%s by %s - Pithos" % (song.title, song.artist))
+        self.set_title(format_window_title(song))
 
         self.update_song_row()
 
